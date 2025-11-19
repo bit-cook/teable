@@ -200,6 +200,8 @@ export interface ISelectFormulaConversionContext extends IFormulaConversionConte
   tableAlias?: string;
   /** CTE map: linkFieldId -> cteName */
   fieldCteMap?: ReadonlyMap<string, string>;
+  /** Link field IDs whose CTEs have already been emitted (safe for reference) */
+  readyLinkFieldIds?: ReadonlySet<string>;
   /** When true, prefer raw field references (no title formatting) to preserve native types */
   preferRawFieldReferences?: boolean;
   /** Target DB field type for the enclosing formula selection (used for type-sensitive raw projection) */
@@ -1880,6 +1882,7 @@ export class SelectColumnSqlConversionVisitor extends BaseSqlConversionVisitor<I
     const selection = selectionMap?.get(fieldId);
     let selectionSql = typeof selection === 'string' ? selection : selection?.toSQL().sql;
     const cteMap = selectContext.fieldCteMap;
+    const readyLinkFieldIds = selectContext.readyLinkFieldIds;
     // For link fields with CTE mapping, use the CTE directly
     // No need for complex cross-CTE reference handling in most cases
 
@@ -1890,7 +1893,11 @@ export class SelectColumnSqlConversionVisitor extends BaseSqlConversionVisitor<I
       // display fields for nested link CTEs), we still need to reference the CTE to access the link
       // value even in raw contexts; otherwise formulas that reference link fields end up reading
       // NULL placeholders instead of the computed JSON payload.
-      if (cteMap?.has(fieldId) && (!preferRaw || !selectionSql)) {
+      const canReferenceCte =
+        cteMap?.has(fieldId) &&
+        (!readyLinkFieldIds || readyLinkFieldIds.has(fieldId)) &&
+        (!preferRaw || !selectionSql);
+      if (canReferenceCte) {
         const cteName = cteMap.get(fieldId)!;
         selectionSql = `"${cteName}"."link_value"`;
       }

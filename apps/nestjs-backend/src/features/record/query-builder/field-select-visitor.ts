@@ -296,6 +296,7 @@ export class FieldSelectVisitor implements IFieldVisitor<IFieldSelectName> {
           tableAlias: this.tableAlias,
           selectionMap: this.getSelectionMap(),
           fieldCteMap: this.state.getFieldCteMap(),
+          readyLinkFieldIds: this.readyLinkFieldIds,
           timeZone: timezone,
           preferRawFieldReferences: this.preferRawFieldReferences,
           targetDbFieldType: field.dbFieldType,
