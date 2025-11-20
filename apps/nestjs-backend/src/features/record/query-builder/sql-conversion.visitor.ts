@@ -202,8 +202,12 @@ export interface ISelectFormulaConversionContext extends IFormulaConversionConte
   fieldCteMap?: ReadonlyMap<string, string>;
   /** Link field IDs whose CTEs have already been emitted (safe for reference) */
   readyLinkFieldIds?: ReadonlySet<string>;
+  /** Current link field id whose CTE is being generated (used to avoid self references) */
+  currentLinkFieldId?: string;
   /** When true, prefer raw field references (no title formatting) to preserve native types */
   preferRawFieldReferences?: boolean;
+  /** When false, avoid referencing link CTEs and fallback to base columns */
+  allowLinkCteReference?: boolean;
   /** Target DB field type for the enclosing formula selection (used for type-sensitive raw projection) */
   targetDbFieldType?: DbFieldType;
 }
@@ -1883,6 +1887,11 @@ export class SelectColumnSqlConversionVisitor extends BaseSqlConversionVisitor<I
     let selectionSql = typeof selection === 'string' ? selection : selection?.toSQL().sql;
     const cteMap = selectContext.fieldCteMap;
     const readyLinkFieldIds = selectContext.readyLinkFieldIds;
+    const isSelfReference = selectContext.currentLinkFieldId === fieldId;
+    const allowLinkCteReference =
+      selectContext.allowLinkCteReference === undefined
+        ? true
+        : !!selectContext.allowLinkCteReference;
     // For link fields with CTE mapping, use the CTE directly
     // No need for complex cross-CTE reference handling in most cases
 
@@ -1894,6 +1903,8 @@ export class SelectColumnSqlConversionVisitor extends BaseSqlConversionVisitor<I
       // value even in raw contexts; otherwise formulas that reference link fields end up reading
       // NULL placeholders instead of the computed JSON payload.
       const canReferenceCte =
+        allowLinkCteReference &&
+        !isSelfReference &&
         cteMap?.has(fieldId) &&
         (!readyLinkFieldIds || readyLinkFieldIds.has(fieldId)) &&
         (!preferRaw || !selectionSql);
