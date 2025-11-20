@@ -6,10 +6,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { FieldType, ILocalization } from '@teable/core';
 import { getRandomString } from '@teable/core';
 import { UploadType } from '@teable/openapi';
-import type { IImportOptionRo, IImportColumn } from '@teable/openapi';
+import type { IImportOptionRo, IImportColumn, IInplaceImportOptionRo } from '@teable/openapi';
 import { Job, Queue } from 'bullmq';
 import Papa from 'papaparse';
-import { EventEmitterService } from '../../../event-emitter/event-emitter.service';
 import type { I18nPath } from '../../../types/i18n.generated';
 import StorageAdapter from '../../attachments/plugins/adapter';
 import { InjectStorageAdapter } from '../../attachments/plugins/storage';
@@ -34,6 +33,12 @@ interface ITableImportChunkJob {
     name: string;
   };
   userId: string;
+  origin?: {
+    ip: string;
+    byApi: boolean;
+    userAgent: string;
+    referer: string;
+  };
   importerParams: Pick<IImportOptionRo, 'attachmentUrl' | 'fileType'> & {
     maxRowCount?: number;
   };
@@ -47,6 +52,7 @@ interface ITableImportChunkJob {
     fields: { id: string; type: FieldType }[];
     sourceColumnMap?: Record<string, number | null>;
   };
+  ro: IImportOptionRo | IInplaceImportOptionRo;
 }
 
 export const TABLE_IMPORT_CSV_CHUNK_QUEUE = 'import-table-csv-chunk-queue';
@@ -63,7 +69,6 @@ export class ImportTableCsvChunkQueueProcessor extends WorkerHost {
 
   constructor(
     private readonly notificationService: NotificationService,
-    private readonly eventEmitterService: EventEmitterService,
     private readonly importTableCsvQueueProcessor: ImportTableCsvQueueProcessor,
     @InjectStorageAdapter() private readonly storageAdapter: StorageAdapter,
     @InjectQueue(TABLE_IMPORT_CSV_CHUNK_QUEUE) public readonly queue: Queue<ITableImportChunkJob>
@@ -213,9 +218,11 @@ export class ImportTableCsvChunkQueueProcessor extends WorkerHost {
     const {
       baseId,
       userId,
+      origin,
       table,
       recordsCal,
       options: { notification },
+      ro,
     } = job;
 
     const { columnInfo, fields, sourceColumnMap } = recordsCal;
@@ -248,6 +255,7 @@ export class ImportTableCsvChunkQueueProcessor extends WorkerHost {
       {
         baseId,
         userId,
+        origin,
         path,
         columnInfo,
         fields,
@@ -257,6 +265,7 @@ export class ImportTableCsvChunkQueueProcessor extends WorkerHost {
         notification,
         lastChunk,
         parentJobId: jobId,
+        ro,
       },
       {
         jobId: chunkJobId,
