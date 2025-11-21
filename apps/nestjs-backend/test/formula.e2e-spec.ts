@@ -1086,6 +1086,267 @@ describe('OpenAPI formula (e2e)', () => {
     });
   });
 
+  describe('LAST_MODIFIED_TIME field parameter', () => {
+    it('should update when any referenced field changes', async () => {
+      const multiTrackedFormulaField = await createField(table1Id, {
+        name: 'multi-tracked-last-modified',
+        type: FieldType.Formula,
+        options: {
+          expression: `LAST_MODIFIED_TIME({${textFieldRo.id}}, {${numberFieldRo.id}})`,
+        },
+      });
+
+      const { records } = await createRecords(table1Id, {
+        fieldKeyType: FieldKeyType.Name,
+        records: [
+          {
+            fields: {
+              [textFieldRo.name]: 'initial text',
+              [numberFieldRo.name]: 1,
+              [multiSelectFieldRo.name]: ['Alpha'],
+            },
+          },
+        ],
+      });
+      const recordId = records[0].id;
+
+      const initialRecord = await getRecord(table1Id, recordId);
+      const initialFormulaValue = initialRecord.data.fields[multiTrackedFormulaField.name];
+      expect(initialFormulaValue).toEqual(initialRecord.data.lastModifiedTime);
+
+      // Untracked field change should NOT update the formula
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [multiSelectFieldRo.name]: ['Beta'],
+          },
+        },
+      });
+
+      const afterUntrackedUpdate = await getRecord(table1Id, recordId);
+      expect(afterUntrackedUpdate.data.lastModifiedTime).not.toEqual(
+        initialRecord.data.lastModifiedTime
+      );
+      expect(afterUntrackedUpdate.data.fields[multiTrackedFormulaField.name]).toEqual(
+        initialFormulaValue
+      );
+
+      // Any tracked field change should update the formula
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [numberFieldRo.name]: 2,
+          },
+        },
+      });
+
+      const afterTrackedUpdate = await getRecord(table1Id, recordId);
+      expect(afterTrackedUpdate.data.fields[multiTrackedFormulaField.name]).not.toEqual(
+        initialFormulaValue
+      );
+      expect(afterTrackedUpdate.data.fields[multiTrackedFormulaField.name]).toEqual(
+        afterTrackedUpdate.data.lastModifiedTime
+      );
+    });
+
+    it('should update only when the referenced field changes', async () => {
+      const lastModifiedFormulaField = await createField(table1Id, {
+        name: 'tracked-last-modified',
+        type: FieldType.Formula,
+        options: {
+          expression: `LAST_MODIFIED_TIME({${textFieldRo.id}})`,
+        },
+      });
+
+      const { records } = await createRecords(table1Id, {
+        fieldKeyType: FieldKeyType.Name,
+        records: [
+          {
+            fields: {
+              [textFieldRo.name]: 'initial text',
+              [numberFieldRo.name]: 1,
+            },
+          },
+        ],
+      });
+      const recordId = records[0].id;
+
+      const initialRecord = await getRecord(table1Id, recordId);
+      const initialFormulaValue = initialRecord.data.fields[lastModifiedFormulaField.name];
+      expect(initialFormulaValue).toEqual(initialRecord.data.lastModifiedTime);
+
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [numberFieldRo.name]: 99,
+          },
+        },
+      });
+
+      const afterUnrelatedUpdate = await getRecord(table1Id, recordId);
+      expect(afterUnrelatedUpdate.data.lastModifiedTime).not.toEqual(
+        initialRecord.data.lastModifiedTime
+      );
+      expect(afterUnrelatedUpdate.data.fields[lastModifiedFormulaField.name]).toEqual(
+        initialFormulaValue
+      );
+
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [textFieldRo.name]: 'updated text',
+          },
+        },
+      });
+
+      const afterTrackedUpdate = await getRecord(table1Id, recordId);
+      expect(afterTrackedUpdate.data.fields[lastModifiedFormulaField.name]).not.toEqual(
+        initialFormulaValue
+      );
+      expect(afterTrackedUpdate.data.fields[lastModifiedFormulaField.name]).toEqual(
+        afterTrackedUpdate.data.lastModifiedTime
+      );
+    });
+
+    it('should continue to work without passing the optional parameter', async () => {
+      const defaultLastModifiedField = await createField(table1Id, {
+        name: 'default-last-modified',
+        type: FieldType.Formula,
+        options: {
+          expression: 'LAST_MODIFIED_TIME()',
+        },
+      });
+
+      const { records } = await createRecords(table1Id, {
+        fieldKeyType: FieldKeyType.Name,
+        records: [
+          {
+            fields: {
+              [textFieldRo.name]: 'plain text',
+            },
+          },
+        ],
+      });
+      const recordId = records[0].id;
+
+      const initialRecord = await getRecord(table1Id, recordId);
+      const initialFormulaValue = initialRecord.data.fields[defaultLastModifiedField.name];
+      expect(initialFormulaValue).toEqual(initialRecord.data.lastModifiedTime);
+
+      // Any field change should update the default tracking formula
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [numberFieldRo.name]: 123,
+          },
+        },
+      });
+
+      const afterAnyUpdate = await getRecord(table1Id, recordId);
+      expect(afterAnyUpdate.data.fields[defaultLastModifiedField.name]).not.toEqual(
+        initialFormulaValue
+      );
+      expect(afterAnyUpdate.data.fields[defaultLastModifiedField.name]).toEqual(
+        afterAnyUpdate.data.lastModifiedTime
+      );
+
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [textFieldRo.name]: 'changed text',
+          },
+        },
+      });
+
+      const afterDefaultUpdate = await getRecord(table1Id, recordId);
+      expect(afterDefaultUpdate.data.fields[defaultLastModifiedField.name]).not.toEqual(
+        afterAnyUpdate.data.fields[defaultLastModifiedField.name]
+      );
+      expect(afterDefaultUpdate.data.fields[defaultLastModifiedField.name]).toEqual(
+        afterDefaultUpdate.data.lastModifiedTime
+      );
+    });
+
+    it('should allow configuring Last Modified Time field to track specific fields only', async () => {
+      const specificLmt = await createField(table1Id, {
+        name: 'specific-lmt',
+        type: FieldType.LastModifiedTime,
+        options: {
+          formatting: {
+            date: DateFormattingPreset.ISO,
+            time: TimeFormatting.None,
+            timeZone: 'UTC',
+          },
+          trackedFieldIds: [textFieldRo.id],
+        },
+      });
+
+      const { records } = await createRecords(table1Id, {
+        fieldKeyType: FieldKeyType.Name,
+        records: [
+          {
+            fields: {
+              [textFieldRo.name]: 'initial text',
+              [numberFieldRo.name]: 1,
+            },
+          },
+        ],
+      });
+      const recordId = records[0].id;
+
+      const initialRecord = await getRecord(table1Id, recordId);
+      const initialLmt = initialRecord.data.fields[specificLmt.name];
+      expect(initialLmt).toEqual(initialRecord.data.lastModifiedTime);
+
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [numberFieldRo.name]: 2,
+          },
+        },
+      });
+
+      const afterUntrackedUpdate = await getRecord(table1Id, recordId);
+      expect(afterUntrackedUpdate.data.fields[specificLmt.name]).toEqual(initialLmt);
+
+      await updateRecord(table1Id, recordId, {
+        fieldKeyType: FieldKeyType.Name,
+        record: {
+          fields: {
+            [textFieldRo.name]: 'updated text',
+          },
+        },
+      });
+
+      const afterTrackedUpdate = await getRecord(table1Id, recordId);
+      expect(afterTrackedUpdate.data.fields[specificLmt.name]).not.toEqual(initialLmt);
+      expect(afterTrackedUpdate.data.fields[specificLmt.name]).toEqual(
+        afterTrackedUpdate.data.lastModifiedTime
+      );
+    });
+
+    it('should reject non-field parameters', async () => {
+      await createField(
+        table1Id,
+        {
+          name: 'invalid-last-modified',
+          type: FieldType.Formula,
+          options: {
+            expression: 'LAST_MODIFIED_TIME("literal param")',
+          },
+        },
+        400
+      );
+    });
+  });
+
   describe('numeric formula functions', () => {
     const numericInput = 12.345;
     const oddExpected = (() => {
