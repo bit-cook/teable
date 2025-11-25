@@ -139,6 +139,15 @@ describe('SelectQueryPostgres unit-aware date helpers', () => {
       expect(tzQuery.datetimeFormat('date_col', `'%Y'`)).toBe(`TO_CHAR(${tz('date_col')}, '%Y')`);
     });
 
+    it('datetimeFormat normalizes Airtable-style tokens before formatting', () => {
+      expect(tzQuery.datetimeFormat('date_col', `'YYYY-MM-DD HH:mm:ss'`)).toBe(
+        `TO_CHAR(${tz('date_col')}, 'YYYY-MM-DD HH24:MI:SS')`
+      );
+      expect(tzQuery.datetimeFormat('date_col', `'YYYY-MM-DD hh:mm A'`)).toBe(
+        `TO_CHAR(${tz('date_col')}, 'YYYY-MM-DD HH12:MI AM')`
+      );
+    });
+
     it('isAfter compares timezone-normalized expressions', () => {
       expect(tzQuery.isAfter('date_a', 'date_b')).toBe(`${tz('date_a')} > ${tz('date_b')}`);
     });

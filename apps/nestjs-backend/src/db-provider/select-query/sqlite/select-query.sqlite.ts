@@ -1,5 +1,5 @@
-import { isTextLikeParam, resolveFormulaParamInfo } from '../../utils/formula-param-metadata.util';
 import type { ISelectFormulaConversionContext } from '../../../features/record/query-builder/sql-conversion.visitor';
+import { isTextLikeParam, resolveFormulaParamInfo } from '../../utils/formula-param-metadata.util';
 import { SelectQueryAbstract } from '../select-query.abstract';
 
 /**

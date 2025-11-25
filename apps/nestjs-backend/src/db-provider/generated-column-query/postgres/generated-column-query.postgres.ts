@@ -1,6 +1,7 @@
 /* eslint-disable regexp/no-unused-capturing-group */
 /* eslint-disable no-useless-escape */
 import { DbFieldType } from '@teable/core';
+import { normalizeAirtableDatetimeFormatExpression } from '../../utils/datetime-format.util';
 import { getDefaultDatetimeParsePattern } from '../../utils/default-datetime-parse-pattern';
 import {
   isBooleanLikeParam,
@@ -782,7 +783,8 @@ export class GeneratedColumnQueryPostgres extends GeneratedColumnQueryAbstract {
   }
 
   datetimeFormat(date: string, format: string): string {
-    return `TO_CHAR(${this.castToTimestamp(date)}, ${format})`;
+    const normalizedFormat = normalizeAirtableDatetimeFormatExpression(format);
+    return `TO_CHAR(${this.castToTimestamp(date)}, ${normalizedFormat})`;
   }
 
   datetimeParse(dateString: string, format?: string): string {
@@ -792,15 +794,16 @@ export class GeneratedColumnQueryPostgres extends GeneratedColumnQueryAbstract {
     if (format == null) {
       return trustedDatetimeInput ? valueExpr : this.guardDefaultDatetimeParse(valueExpr);
     }
-    const normalized = format.trim();
-    if (!normalized || normalized === 'undefined' || normalized.toLowerCase() === 'null') {
+    const trimmedFormat = format.trim();
+    if (!trimmedFormat || trimmedFormat === 'undefined' || trimmedFormat.toLowerCase() === 'null') {
       return trustedDatetimeInput ? valueExpr : this.guardDefaultDatetimeParse(valueExpr);
     }
     if (trustedDatetimeInput) {
       return valueExpr;
     }
-    const toTimestampExpr = `TO_TIMESTAMP(${valueExpr}::text, ${format})`;
-    const guardPattern = this.buildDatetimeParseGuardRegex(normalized);
+    const normalizedFormat = normalizeAirtableDatetimeFormatExpression(trimmedFormat);
+    const toTimestampExpr = `TO_TIMESTAMP(${valueExpr}::text, ${normalizedFormat})`;
+    const guardPattern = this.buildDatetimeParseGuardRegex(normalizedFormat);
     if (!guardPattern) {
       return toTimestampExpr;
     }
@@ -1070,6 +1073,7 @@ export class GeneratedColumnQueryPostgres extends GeneratedColumnQueryAbstract {
       ['HH24', '\\d{2}'],
       ['HH12', '\\d{2}'],
       ['HH', '\\d{2}'],
+      ['AM', '[AaPp][Mm]'],
       ['MI', '\\d{2}'],
       ['SS', '\\d{2}'],
       ['MS', '\\d{1,3}'],
