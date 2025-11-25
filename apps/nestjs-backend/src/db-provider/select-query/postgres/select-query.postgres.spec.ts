@@ -319,14 +319,14 @@ describe('SelectQueryPostgres unit-aware date helpers', () => {
     it('sum rewrites multiple params to addition with numeric coercion', () => {
       const sql = query.sum(['column_a', 'column_b', '10']);
       expect(sql).toBe(
-        "(COALESCE(NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '')::double precision, 0) + COALESCE(NULLIF(REGEXP_REPLACE(((column_b)::text), '[^0-9.+-]', '', 'g'), '')::double precision, 0) + COALESCE((10)::double precision, 0))"
+        "(COALESCE((CASE WHEN NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '') IS NULL THEN NULL WHEN NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '') ~ '^[+-]{0,1}(\\d+(\\.\\d+){0,1}|\\.\\d+)$' THEN NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '')::double precision ELSE NULL END), 0) + COALESCE((CASE WHEN NULLIF(REGEXP_REPLACE(((column_b)::text), '[^0-9.+-]', '', 'g'), '') IS NULL THEN NULL WHEN NULLIF(REGEXP_REPLACE(((column_b)::text), '[^0-9.+-]', '', 'g'), '') ~ '^[+-]{0,1}(\\d+(\\.\\d+){0,1}|\\.\\d+)$' THEN NULLIF(REGEXP_REPLACE(((column_b)::text), '[^0-9.+-]', '', 'g'), '')::double precision ELSE NULL END), 0) + COALESCE((10)::double precision, 0))"
       );
     });
 
     it('average divides the rewritten sum by parameter count', () => {
       const sql = query.average(['column_a', '10']);
       expect(sql).toBe(
-        "((COALESCE(NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '')::double precision, 0) + COALESCE((10)::double precision, 0))) / 2"
+        "((COALESCE((CASE WHEN NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '') IS NULL THEN NULL WHEN NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '') ~ '^[+-]{0,1}(\\d+(\\.\\d+){0,1}|\\.\\d+)$' THEN NULLIF(REGEXP_REPLACE(((column_a)::text), '[^0-9.+-]', '', 'g'), '')::double precision ELSE NULL END), 0) + COALESCE((10)::double precision, 0))) / 2"
       );
     });
   });
