@@ -16,6 +16,13 @@ describe('GeneratedColumnQuerySqlite unit-aware helpers', () => {
     query.setContext(stubContext);
   });
 
+  it('normalizes empty-string comparisons without coalescing blanks to empty strings', () => {
+    // Left literal is '', right side should stay NULL when blank/empty
+    expect(query.equal("''", 'col_ref')).toBe("('' = NULLIF(CAST((col_ref) AS TEXT), ''))");
+    // Right literal is '', left side normalization should also yield NULL for blanks
+    expect(query.notEqual('col_ref', "''")).toBe("(NULLIF(CAST((col_ref) AS TEXT), '') <> '')");
+  });
+
   const dateAddCases: Array<{ literal: string; unit: string; factor: number }> = [
     { literal: 'millisecond', unit: 'seconds', factor: 0.001 },
     { literal: 'milliseconds', unit: 'seconds', factor: 0.001 },

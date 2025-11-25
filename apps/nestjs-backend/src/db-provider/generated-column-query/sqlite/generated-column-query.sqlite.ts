@@ -12,7 +12,8 @@ export class GeneratedColumnQuerySqlite extends GeneratedColumnQueryAbstract {
   }
 
   private normalizeBlankComparable(value: string): string {
-    return `COALESCE(NULLIF(CAST((${value}) AS TEXT), ''), '')`;
+    // Preserve real NULLs while treating empty strings as NULL for comparisons
+    return `NULLIF(CAST((${value}) AS TEXT), '')`;
   }
 
   private buildBlankAwareComparison(operator: '=' | '<>', left: string, right: string): string {
