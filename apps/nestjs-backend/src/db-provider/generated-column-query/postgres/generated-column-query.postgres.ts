@@ -121,38 +121,23 @@ export class GeneratedColumnQueryPostgres extends GeneratedColumnQueryAbstract {
     right: string,
     metadataIndexes?: { left?: number; right?: number }
   ): string {
-    const shouldNormalize = this.isEmptyStringLiteral(left) || this.isEmptyStringLiteral(right);
     const leftIndex = metadataIndexes?.left;
     const rightIndex = metadataIndexes?.right;
-    if (!shouldNormalize) {
-      const leftIsText = this.isTextLikeExpression(left, leftIndex);
-      const rightIsText = this.isTextLikeExpression(right, rightIndex);
+    const leftIsEmptyLiteral = this.isEmptyStringLiteral(left);
+    const rightIsEmptyLiteral = this.isEmptyStringLiteral(right);
+    const leftIsText = this.isTextLikeExpression(left, leftIndex);
+    const rightIsText = this.isTextLikeExpression(right, rightIndex);
+    const normalizeText = leftIsEmptyLiteral || rightIsEmptyLiteral || leftIsText || rightIsText;
 
-      let normalizedLeft = left;
-      let normalizedRight = right;
-
-      if (leftIsText) {
-        normalizedLeft = this.ensureTextCollation(left);
-      }
-      if (rightIsText) {
-        normalizedRight = this.ensureTextCollation(right);
-      }
-
-      if (leftIsText && !rightIsText) {
-        normalizedRight = this.coerceToTextComparable(right, rightIndex);
-      } else if (!leftIsText && rightIsText) {
-        normalizedLeft = this.coerceToTextComparable(left, leftIndex);
-      }
-
-      return `(${normalizedLeft} ${operator} ${normalizedRight})`;
+    if (!normalizeText) {
+      return `(${left} ${operator} ${right})`;
     }
 
-    const normalizedLeft = this.isEmptyStringLiteral(left)
-      ? "''"
-      : this.normalizeBlankComparable(left, leftIndex);
-    const normalizedRight = this.isEmptyStringLiteral(right)
-      ? "''"
-      : this.normalizeBlankComparable(right, rightIndex);
+    const normalizeOperand = (value: string, isEmptyLiteral: boolean, metadataIndex?: number) =>
+      isEmptyLiteral ? "''" : this.normalizeBlankComparable(value, metadataIndex);
+
+    const normalizedLeft = normalizeOperand(left, leftIsEmptyLiteral, leftIndex);
+    const normalizedRight = normalizeOperand(right, rightIsEmptyLiteral, rightIndex);
 
     return `(${normalizedLeft} ${operator} ${normalizedRight})`;
   }

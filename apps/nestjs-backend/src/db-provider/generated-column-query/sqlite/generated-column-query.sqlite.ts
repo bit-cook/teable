@@ -1,4 +1,5 @@
 /* eslint-disable sonarjs/no-identical-functions */
+import { isTextLikeParam, resolveFormulaParamInfo } from '../../utils/formula-param-metadata.util';
 import { GeneratedColumnQueryAbstract } from '../generated-column-query.abstract';
 
 /**
@@ -7,29 +8,45 @@ import { GeneratedColumnQueryAbstract } from '../generated-column-query.abstract
  * for use in generated columns. All generated SQL must be immutable.
  */
 export class GeneratedColumnQuerySqlite extends GeneratedColumnQueryAbstract {
+  private getParamInfo(index?: number) {
+    return resolveFormulaParamInfo(this.currentCallMetadata, index);
+  }
+
+  private isStringLiteral(value: string): boolean {
+    const trimmed = value.trim();
+    return /^'.*'$/.test(trimmed);
+  }
+
   private isEmptyStringLiteral(value: string): boolean {
     return value.trim() === "''";
   }
 
   private normalizeBlankComparable(value: string): string {
-    // Preserve real NULLs while treating empty strings as NULL for comparisons
-    return `NULLIF(CAST((${value}) AS TEXT), '')`;
+    // Treat NULL and empty strings as empty text for comparison parity with interpreter
+    return `COALESCE(NULLIF(CAST((${value}) AS TEXT), ''), '')`;
   }
 
   private buildBlankAwareComparison(operator: '=' | '<>', left: string, right: string): string {
-    const shouldNormalize = this.isEmptyStringLiteral(left) || this.isEmptyStringLiteral(right);
-    if (!shouldNormalize) {
+    const leftIsEmptyLiteral = this.isEmptyStringLiteral(left);
+    const rightIsEmptyLiteral = this.isEmptyStringLiteral(right);
+    const leftInfo = this.getParamInfo(0);
+    const rightInfo = this.getParamInfo(1);
+    const textComparison =
+      leftIsEmptyLiteral ||
+      rightIsEmptyLiteral ||
+      this.isStringLiteral(left) ||
+      this.isStringLiteral(right) ||
+      isTextLikeParam(leftInfo) ||
+      isTextLikeParam(rightInfo);
+
+    if (!textComparison) {
       return `(${left} ${operator} ${right})`;
     }
 
-    const normalizedLeft = this.isEmptyStringLiteral(left)
-      ? "''"
-      : this.normalizeBlankComparable(left);
-    const normalizedRight = this.isEmptyStringLiteral(right)
-      ? "''"
-      : this.normalizeBlankComparable(right);
+    const normalize = (value: string, isEmptyLiteral: boolean) =>
+      isEmptyLiteral ? "''" : this.normalizeBlankComparable(value);
 
-    return `(${normalizedLeft} ${operator} ${normalizedRight})`;
+    return `(${normalize(left, leftIsEmptyLiteral)} ${operator} ${normalize(right, rightIsEmptyLiteral)})`;
   }
 
   // Numeric Functions

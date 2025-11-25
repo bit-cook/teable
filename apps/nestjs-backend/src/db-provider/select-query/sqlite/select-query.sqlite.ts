@@ -1,3 +1,4 @@
+import { isTextLikeParam, resolveFormulaParamInfo } from '../../utils/formula-param-metadata.util';
 import type { ISelectFormulaConversionContext } from '../../../features/record/query-builder/sql-conversion.visitor';
 import { SelectQueryAbstract } from '../select-query.abstract';
 
@@ -11,6 +12,15 @@ export class SelectQuerySqlite extends SelectQueryAbstract {
   private get tableAlias(): string | undefined {
     const ctx = this.context as ISelectFormulaConversionContext | undefined;
     return ctx?.tableAlias;
+  }
+
+  private getParamInfo(index?: number) {
+    return resolveFormulaParamInfo(this.currentCallMetadata, index);
+  }
+
+  private isStringLiteral(value: string): boolean {
+    const trimmed = value.trim();
+    return /^'.*'$/.test(trimmed);
   }
 
   private qualifySystemColumn(column: string): string {
@@ -28,19 +38,26 @@ export class SelectQuerySqlite extends SelectQueryAbstract {
   }
 
   private buildBlankAwareComparison(operator: '=' | '<>', left: string, right: string): string {
-    const shouldNormalize = this.isEmptyStringLiteral(left) || this.isEmptyStringLiteral(right);
+    const leftIsEmptyLiteral = this.isEmptyStringLiteral(left);
+    const rightIsEmptyLiteral = this.isEmptyStringLiteral(right);
+    const leftInfo = this.getParamInfo(0);
+    const rightInfo = this.getParamInfo(1);
+    const shouldNormalize =
+      leftIsEmptyLiteral ||
+      rightIsEmptyLiteral ||
+      this.isStringLiteral(left) ||
+      this.isStringLiteral(right) ||
+      isTextLikeParam(leftInfo) ||
+      isTextLikeParam(rightInfo);
+
     if (!shouldNormalize) {
       return `(${left} ${operator} ${right})`;
     }
 
-    const normalizedLeft = this.isEmptyStringLiteral(left)
-      ? "''"
-      : this.normalizeBlankComparable(left);
-    const normalizedRight = this.isEmptyStringLiteral(right)
-      ? "''"
-      : this.normalizeBlankComparable(right);
+    const normalize = (value: string, isEmptyLiteral: boolean) =>
+      isEmptyLiteral ? "''" : this.normalizeBlankComparable(value);
 
-    return `(${normalizedLeft} ${operator} ${normalizedRight})`;
+    return `(${normalize(left, leftIsEmptyLiteral)} ${operator} ${normalize(right, rightIsEmptyLiteral)})`;
   }
 
   private coalesceNumeric(expr: string): string {

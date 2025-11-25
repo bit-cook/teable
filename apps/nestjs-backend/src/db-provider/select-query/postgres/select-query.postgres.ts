@@ -441,42 +441,41 @@ export class SelectQueryPostgres extends SelectQueryAbstract {
     right: string,
     metadataIndexes?: { left?: number; right?: number }
   ): string {
-    const shouldNormalize =
-      this.isEmptyStringLiteral(left) ||
-      this.isEmptyStringLiteral(right) ||
-      this.isNullLiteral(left) ||
-      this.isNullLiteral(right);
     const leftIndex = metadataIndexes?.left;
     const rightIndex = metadataIndexes?.right;
-    if (!shouldNormalize) {
-      const leftIsText = this.isTextLikeExpression(left, leftIndex);
-      const rightIsText = this.isTextLikeExpression(right, rightIndex);
+    const leftIsEmptyLiteral = this.isEmptyStringLiteral(left);
+    const rightIsEmptyLiteral = this.isEmptyStringLiteral(right);
+    const leftIsNullLiteral = this.isNullLiteral(left);
+    const rightIsNullLiteral = this.isNullLiteral(right);
+    const leftIsText = this.isTextLikeExpression(left, leftIndex);
+    const rightIsText = this.isTextLikeExpression(right, rightIndex);
+    const normalizeText =
+      leftIsEmptyLiteral ||
+      rightIsEmptyLiteral ||
+      leftIsNullLiteral ||
+      rightIsNullLiteral ||
+      leftIsText ||
+      rightIsText;
 
-      let normalizedLeft = left;
-      let normalizedRight = right;
-
-      if (leftIsText) {
-        normalizedLeft = this.ensureTextCollation(left);
-      }
-      if (rightIsText) {
-        normalizedRight = this.ensureTextCollation(right);
-      }
-
-      if (leftIsText && !rightIsText) {
-        normalizedRight = this.coerceToTextComparable(right, rightIndex);
-      } else if (!leftIsText && rightIsText) {
-        normalizedLeft = this.coerceToTextComparable(left, leftIndex);
-      }
-
-      return `(${normalizedLeft} ${operator} ${normalizedRight})`;
+    if (!normalizeText) {
+      return `(${left} ${operator} ${right})`;
     }
 
-    const normalizedLeft = this.isEmptyStringLiteral(left)
-      ? "''"
-      : this.normalizeBlankComparable(left, leftIndex);
-    const normalizedRight = this.isEmptyStringLiteral(right)
-      ? "''"
-      : this.normalizeBlankComparable(right, rightIndex);
+    const normalizeOperand = (
+      value: string,
+      isEmptyLiteral: boolean,
+      isNullLiteral: boolean,
+      metadataIndex?: number
+    ) =>
+      isEmptyLiteral || isNullLiteral ? "''" : this.normalizeBlankComparable(value, metadataIndex);
+
+    const normalizedLeft = normalizeOperand(left, leftIsEmptyLiteral, leftIsNullLiteral, leftIndex);
+    const normalizedRight = normalizeOperand(
+      right,
+      rightIsEmptyLiteral,
+      rightIsNullLiteral,
+      rightIndex
+    );
 
     return `(${normalizedLeft} ${operator} ${normalizedRight})`;
   }
