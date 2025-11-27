@@ -238,7 +238,9 @@ export class SelectQueryPostgres extends SelectQueryAbstract {
 
   private normalizeBlankComparable(value: string, metadataIndex?: number): string {
     const comparable = this.coerceToTextComparable(value, metadataIndex);
-    return `COALESCE(NULLIF(${comparable}, ''), '')`;
+    // Force text comparison so numeric fields compared against '' won't cast '' to double precision
+    const textComparable = this.ensureTextCollation(comparable);
+    return `COALESCE(NULLIF(${textComparable}, ''), '')`;
   }
 
   private ensureTextCollation(expr: string): string {
@@ -403,7 +405,9 @@ export class SelectQueryPostgres extends SelectQueryAbstract {
       expressionFieldType === DbFieldType.Real ||
       expressionFieldType === DbFieldType.Integer;
     if (numericField && !paramInfo?.isJsonField && !paramInfo?.isMultiValueField) {
-      return wrapped;
+      // Cast numeric operands to text so blank comparisons (e.g. field = '') don't try to
+      // coerce '' into double precision and raise 22P02.
+      return this.ensureTextCollation(wrapped);
     }
     if (paramInfo?.hasMetadata) {
       if (isJsonLikeParam(paramInfo)) {
@@ -1274,17 +1278,11 @@ export class SelectQueryPostgres extends SelectQueryAbstract {
   }
 
   workday(startDate: string, days: string): string {
-    if (!this.isDateLikeOperand(0)) {
-      return 'NULL';
-    }
-    // Simplified implementation in the target timezone
+    // Simplified implementation in the target timezone; tzWrap sanitizes untrusted inputs
     return `(${this.tzWrap(startDate, 0)})::date + INTERVAL '${days} days'`;
   }
 
   workdayDiff(startDate: string, endDate: string): string {
-    if (!this.isDateLikeOperand(0) || !this.isDateLikeOperand(1)) {
-      return 'NULL';
-    }
     // Simplified implementation with timezone-aware, sanitized inputs
     const start = `(${this.tzWrap(startDate, 0)})`;
     const end = `(${this.tzWrap(endDate, 1)})`;
