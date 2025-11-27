@@ -166,11 +166,13 @@ describe('SelectQueryPostgres unit-aware date helpers', () => {
       );
     });
 
-    it('datetimeFormat tolerates missing or empty format expressions', () => {
+    it('datetimeFormat falls back to an ISO-like pattern when format is missing or blank', () => {
       expect(tzQuery.datetimeFormat('date_col', undefined as unknown as string)).toBe(
-        `TO_CHAR(${tz('date_col')}, '')`
+        `TO_CHAR(${tz('date_col')}, 'YYYY-MM-DD')`
       );
-      expect(tzQuery.datetimeFormat('date_col', '   ')).toBe(`TO_CHAR(${tz('date_col')}, '')`);
+      expect(tzQuery.datetimeFormat('date_col', '   ')).toBe(
+        `TO_CHAR(${tz('date_col')}, 'YYYY-MM-DD')`
+      );
     });
 
     it('isAfter compares timezone-normalized expressions', () => {

@@ -6,14 +6,16 @@
  * - ss / s map to second tokens (SS / FMSS)
  * Other common tokens are passed through as-is.
  */
+const DEFAULT_DATETIME_FORMAT_EXPR = "'YYYY-MM-DD'";
+
 export const normalizeAirtableDatetimeFormatExpression = (formatExpr?: string | null): string => {
   if (typeof formatExpr !== 'string') {
-    return "''";
+    return DEFAULT_DATETIME_FORMAT_EXPR;
   }
 
   const trimmed = formatExpr.trim();
   if (!trimmed) {
-    return "''";
+    return DEFAULT_DATETIME_FORMAT_EXPR;
   }
 
   if (!trimmed.startsWith("'") || !trimmed.endsWith("'")) {

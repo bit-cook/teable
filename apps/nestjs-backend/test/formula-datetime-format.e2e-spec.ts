@@ -64,6 +64,50 @@ describe('Formula DATETIME_FORMAT token semantics (e2e)', () => {
     }
   });
 
+  it('defaults DATETIME_FORMAT to an ISO-like pattern when the format is omitted', async () => {
+    let tableId: string | undefined;
+    const dateFieldId = generateFieldId();
+
+    try {
+      const table = await createTable(baseId, {
+        name: 'formula-datetime-format-default',
+        fields: [
+          { id: dateFieldId, name: 'handover_time', type: FieldType.Date },
+          {
+            name: 'handover_year',
+            type: FieldType.Formula,
+            options: {
+              expression: `LEFT(DATETIME_FORMAT({${dateFieldId}}), 4)`,
+              timeZone: 'Asia/Shanghai',
+            },
+          },
+        ],
+      });
+      tableId = table.id;
+
+      const formulaFieldId =
+        table.fields.find((f) => f.name === 'handover_year')?.id ??
+        (() => {
+          throw new Error('handover_year field not found');
+        })();
+
+      const input = '2024-10-10T16:00:00.000Z';
+      const { records } = await createRecords(tableId, {
+        fieldKeyType: FieldKeyType.Name,
+        typecast: true,
+        records: [{ fields: { handover_time: input } }],
+      });
+
+      const record = await getRecord(tableId, records[0].id);
+      const value = record.fields?.[formulaFieldId as string];
+      expect(value).toBe('2024');
+    } finally {
+      if (tableId) {
+        await permanentDeleteTable(baseId, tableId);
+      }
+    }
+  });
+
   it('keeps hh with A as a 12-hour clock while mm stays minutes', async () => {
     let tableId: string | undefined;
     const dateFieldId = generateFieldId();
