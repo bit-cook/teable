@@ -874,7 +874,7 @@ describe('Comprehensive Field Sort Tests (e2e)', () => {
     });
 
     afterEach(async () => {
-      await permanentDeleteTable(specialTable.id);
+      await permanentDeleteTable(baseId, specialTable.id);
     });
 
     test('should sort ascending even when choices contain "?"', async () => {
