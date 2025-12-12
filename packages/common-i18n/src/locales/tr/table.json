@@ -51,8 +51,8 @@
   "welcome": {
     "title": "Hoş Geldiniz",
     "emptyTitle": "Veritabanınızı Oluşturmaya Başlayın",
-    "description": "Kaynak eklemek için kenar çubuğundaki \"+\" düğmesine tıklayın ve verilerinizi verimli bir şekilde yönetmeye başlayın",
-    "help": "Daha fazla bilgi için <HelpCenter /> adresini ziyaret edin.",
+    "description": "Kaynak eklemek için kenar çubuğundaki \"+\" düğmesine tıklayın",
+    "help": "Daha fazla bilgi için <HelpCenter /> adresini ziyaret edin",
     "helpCenter": "Yardım Merkezi"
   },
   "field": {

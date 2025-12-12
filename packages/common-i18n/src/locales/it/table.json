@@ -51,7 +51,7 @@
   "welcome": {
     "title": "Benvenuto",
     "emptyTitle": "Inizia a costruire il tuo database",
-    "description": "Fai clic sul pulsante \"+\" nella barra laterale per aggiungere risorse e inizia a gestire i tuoi dati in modo efficiente",
+    "description": "Fai clic sul pulsante \"+\" nella barra laterale per aggiungere risorse",
     "help": "Visita il <HelpCenter /> per maggiori informazioni.",
     "helpCenter": "Centro Assistenza"
   },

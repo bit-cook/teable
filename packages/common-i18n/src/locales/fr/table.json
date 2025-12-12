@@ -49,8 +49,8 @@
   "welcome": {
     "title": "Bienvenue",
     "emptyTitle": "Commencez à créer votre base de données",
-    "description": "Cliquez sur le bouton \"+\" dans la barre latérale pour ajouter des ressources et commencez à gérer vos données efficacement",
-    "help": "Visitez le <HelpCenter /> pour plus d'informations.",
+    "description": "Cliquez sur le bouton \"+\" dans la barre latérale pour ajouter des ressources",
+    "help": "Visitez le <HelpCenter /> pour plus d'informations",
     "helpCenter": "Centre d'aide"
   },
   "field": {

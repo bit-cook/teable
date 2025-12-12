@@ -50,9 +50,9 @@
   },
   "welcome": {
     "title": "Welcome",
-    "emptyTitle": "Start building your database",
-    "description": "Click the \"+\" button in the sidebar to add resources, and start managing your data efficiently",
-    "help": "Visit the <HelpCenter /> for more information.",
+    "emptyTitle": "Start building your base",
+    "description": "Click the \"+\" button in the sidebar to add resources",
+    "help": "Visit the <HelpCenter /> for more information",
     "helpCenter": "Help center"
   },
   "field": {
