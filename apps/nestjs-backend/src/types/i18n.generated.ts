@@ -3837,6 +3837,18 @@ export type I18nTranslations = {
                 "ask": string;
                 "analyze": string;
                 "build": string;
+                "title": string;
+                "whatCanIDo": string;
+                "createOrModifyDatabase": string;
+                "buildAutomations": string;
+                "buildApps": string;
+                "buildMeCRM": string;
+                "addAIField": string;
+                "createDataAnalysis": string;
+                "emailWhenRecordCreated": string;
+                "syncStatusToSlack": string;
+                "buildDashboard": string;
+                "buildLeadCapture": string;
             };
             "buildApp": {
                 "thinking": {

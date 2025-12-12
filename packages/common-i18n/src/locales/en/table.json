@@ -1118,7 +1118,19 @@
       "recommend": "Recommended",
       "ask": "Ask",
       "analyze": "Analyze",
-      "build": "Build"
+      "build": "Build",
+      "title": "How can I help?",
+      "whatCanIDo": "What can I do?",
+      "createOrModifyDatabase": "Create or modify database",
+      "buildAutomations": "Build automations",
+      "buildApps": "Build apps",
+      "buildMeCRM": "Build me a CRM",
+      "addAIField": "Add an AI field to analyze each customer",
+      "createDataAnalysis": "Create me a data analysis report",
+      "emailWhenRecordCreated": "Email me when record created",
+      "syncStatusToSlack": "Sync status updates to Slack",
+      "buildDashboard": "Build a dashboard from this table",
+      "buildLeadCapture": "Build me a lead capture landing page"
     },
     "buildApp": {
       "thinking": {

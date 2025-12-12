@@ -1120,7 +1120,19 @@
       "recommend": "推荐",
       "ask": "提问",
       "analyze": "分析",
-      "build": "构建"
+      "build": "构建",
+      "title": "有什么可以帮您？",
+      "whatCanIDo": "我能做什么？",
+      "createOrModifyDatabase": "创建或修改数据库",
+      "buildAutomations": "构建自动化",
+      "buildApps": "构建应用",
+      "buildMeCRM": "帮我创建一个 CRM",
+      "addAIField": "添加 AI 字段来分析每个客户",
+      "createDataAnalysis": "帮我创建数据分析报告",
+      "emailWhenRecordCreated": "当记录创建时发邮件通知我",
+      "syncStatusToSlack": "将状态更新同步到 Slack",
+      "buildDashboard": "从这个表格构建仪表盘",
+      "buildLeadCapture": "帮我创建一个潜客获取落地页"
     },
     "buildApp": {
       "thinking": {
