@@ -408,7 +408,7 @@
       },
       "app": {
         "domain": "ドメイン",
-        "v0ApiKey": "V0 APIキー",
+        "v0ApiKey": "v0 APIキー",
         "customDomain": "カスタムドメイン（オプション）",
         "customDomainDescription": "アプリのデプロイ用のカスタムドメインを設定し、<a>Vercelドメイン</a>にアクセスしてカスタムドメインを取得してください",
         "vercelToken": "Vercel APIトークン",

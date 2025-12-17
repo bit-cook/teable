@@ -419,7 +419,7 @@
       },
       "app": {
         "domain": "Domain",
-        "v0ApiKey": "V0 API Schlüssel",
+        "v0ApiKey": "v0 API-Schlüssel",
         "customDomain": "Benutzerdefinierte Domain (Optional)",
         "customDomainDescription": "Legen Sie Ihre benutzerdefinierte Domain für die App-Bereitstellung fest, besuchen Sie <a>Vercel Domain</a> um eine benutzerdefinierte Domain zu erhalten",
         "vercelToken": "Vercel API Token",

@@ -401,7 +401,7 @@
       },
       "app": {
         "domain": "Dominio",
-        "v0ApiKey": "Clave API de V0",
+        "v0ApiKey": "Clave de API v0",
         "customDomain": "Dominio Personalizado (Opcional)",
         "customDomainDescription": "Configura tu dominio personalizado para el despliegue de la aplicación, accede a <a>dominio de Vercel</a> para obtener el dominio personalizado",
         "vercelToken": "Token API de Vercel",

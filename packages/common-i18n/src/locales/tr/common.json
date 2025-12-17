@@ -413,7 +413,7 @@
       },
       "app": {
         "domain": "Alan Adı",
-        "v0ApiKey": "V0 API Anahtarı",
+        "v0ApiKey": "v0 API Anahtarı",
         "customDomain": "Özel Alan Adı (İsteğe Bağlı)",
         "customDomainDescription": "Uygulama dağıtımı için özel alan adınızı ayarlayın, özel alan adı almak için <a>Vercel alan adına</a> erişin",
         "vercelToken": "Vercel API Token",

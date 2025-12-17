@@ -554,7 +554,7 @@
       },
       "app": {
         "domain": "Domain",
-        "v0ApiKey": "V0 API Key",
+        "v0ApiKey": "v0 API key",
         "customDomain": "Custom Domain (Optional)",
         "customDomainDescription": "Set your custom domain for app deployment, access <a>Vercel domain</a> to get custom domain",
         "vercelToken": "Vercel API Token",
