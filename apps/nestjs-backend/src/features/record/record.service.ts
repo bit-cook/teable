@@ -14,6 +14,7 @@ import type {
   IFilterSet,
   IGridColumnMeta,
   IGroup,
+  ILinkFieldOptions,
   ILinkCellValue,
   IRecord,
   ISnapshotBase,
@@ -1295,6 +1296,32 @@ export class RecordService {
       }, {});
   }
 
+  private hasPersistedLinkColumn(field: FieldCore) {
+    if (field.type !== FieldType.Link) {
+      return true;
+    }
+
+    const options = field.options as ILinkFieldOptions | undefined;
+    if (!options) {
+      return true;
+    }
+
+    const inferredForeignKeyName =
+      options.foreignKeyName ??
+      (options.relationship === Relationship.ManyOne || options.relationship === Relationship.OneOne
+        ? field.dbFieldName
+        : undefined);
+    const inferredSelfKeyName =
+      options.selfKeyName ??
+      (options.relationship === Relationship.OneMany && options.isOneWay === false
+        ? field.dbFieldName
+        : undefined);
+
+    return (
+      field.dbFieldName !== inferredForeignKeyName && field.dbFieldName !== inferredSelfKeyName
+    );
+  }
+
   private async createBatch(
     table: TableDomain,
     records: IRecordInnerRo[],
@@ -1316,8 +1343,8 @@ export class RecordService {
 
     const validationFields = fields
       .filter((f) => !f.isComputed)
-      .filter((f) => f.type !== FieldType.Link)
-      .filter((field) => field.notNull || field.unique);
+      .filter((field) => field.notNull || field.unique)
+      .filter((field) => this.hasPersistedLinkColumn(field));
 
     const user = this.cls.get('user');
     const auditUserValue =
