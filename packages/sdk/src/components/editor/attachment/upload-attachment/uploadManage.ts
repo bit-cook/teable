@@ -34,11 +34,37 @@ export enum Status {
 export class AttachmentManager {
   limit: number;
   uploadQueue: IUploadTask[];
+  uploadingQueue: IUploadTask[];
   shareId?: string;
+  onUploadingTaskChange?: (uploadingTasks: IUploadTask[], pendingTasks: IUploadTask[]) => void;
 
-  constructor(limit: number) {
+  constructor(
+    limit: number,
+    options: {
+      onUploadingTaskChange?: (uploadingTasks: IUploadTask[], pendingTasks: IUploadTask[]) => void;
+    } = {}
+  ) {
     this.limit = limit;
     this.uploadQueue = [];
+    this.uploadingQueue = [];
+    this.onUploadingTaskChange = options.onUploadingTaskChange || noop;
+  }
+
+  private notifyUploadingTaskChange() {
+    this.onUploadingTaskChange?.(this.uploadingQueue, this.uploadQueue);
+  }
+
+  private addToUploadingQueue(uploadTask: IUploadTask) {
+    this.uploadingQueue.push(uploadTask);
+    this.notifyUploadingTaskChange();
+  }
+
+  private removeFromUploadingQueue(uploadTask: IUploadTask) {
+    const index = this.uploadingQueue.findIndex((task) => task.file.id === uploadTask.file.id);
+    if (index !== -1) {
+      this.uploadingQueue.splice(index, 1);
+      this.notifyUploadingTaskChange();
+    }
   }
 
   upload(
@@ -65,18 +91,14 @@ export class AttachmentManager {
         errorCallback: errorCallback,
         progressCallback: progressCallback,
       };
-
-      if (this.uploadQueue.length < this.limit) {
-        this.executeUpload(uploadTask);
-      } else {
-        this.uploadQueue.push(uploadTask);
-      }
+      this.uploadQueue.push(uploadTask);
+      this.nextUpload();
     }
   }
 
   async executeUpload(uploadTask: IUploadTask) {
     uploadTask.status = Status.Uploading;
-
+    this.addToUploadingQueue(uploadTask);
     try {
       const fileInstance = uploadTask.file.instance;
       const res = await getSignature(
@@ -117,16 +139,24 @@ export class AttachmentManager {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       uploadTask.errorCallback(uploadTask.file, error?.message, error?.status);
+    } finally {
+      this.removeFromUploadingQueue(uploadTask);
+      this.nextUpload();
     }
   }
 
   completeUpload(uploadTask: IUploadTask, attachment: INotifyVo) {
     uploadTask.status = Status.Completed;
     uploadTask.successCallback(uploadTask.file, attachment);
-    // Check if there are pending upload tasks
-    if (this.uploadQueue.length > 0) {
+  }
+
+  nextUpload() {
+    // Start as many uploads as possible up to the limit
+    while (this.uploadingQueue.length < this.limit && this.uploadQueue.length > 0) {
       const nextTask = this.uploadQueue.shift();
-      nextTask && this.executeUpload(nextTask);
+      if (nextTask) {
+        this.executeUpload(nextTask);
+      }
     }
   }
 }
