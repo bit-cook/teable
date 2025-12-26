@@ -40,6 +40,7 @@ import {
   type FieldCore,
   type IRollupFieldOptions,
   DbFieldType,
+  extractFieldIdsFromFilter,
   SortFunc,
   isFieldReferenceValue,
   isLinkLookupOptions,
@@ -241,6 +242,13 @@ class FieldCteSelectionVisitor implements IFieldVisitor<IFieldSelectName> {
     }
     return expression;
   }
+  private buildPhysicalFieldExpression(field: FieldCore, alias: string): string {
+    if (field.hasError) {
+      return this.dialect.typedNullFor(field.dbFieldType);
+    }
+    return `"${alias}"."${field.dbFieldName}"`;
+  }
+
   /**
    * Build a subquery (SELECT 1 WHERE ...) for foreign table filter using provider's filterQuery.
    * The subquery references the current foreign alias in-scope and carries proper bindings.
@@ -421,16 +429,6 @@ class FieldCteSelectionVisitor implements IFieldVisitor<IFieldSelectName> {
       return `"${cteName}"."conditional_lookup_${field.id}"`;
     }
 
-    const buildSelectVisitor = (extraBlockedId?: string) =>
-      this.createFieldSelectVisitor(
-        this.foreignTable,
-        undefined,
-        true,
-        true,
-        extraBlockedId ? [extraBlockedId] : undefined
-      );
-    const selectVisitor = buildSelectVisitor();
-
     const foreignAlias = this.getForeignAlias();
     const targetLookupField = field.getForeignLookupField(this.foreignTable);
 
@@ -453,106 +451,22 @@ class FieldCteSelectionVisitor implements IFieldVisitor<IFieldSelectName> {
       return this.dialect.typedNullFor(field.dbFieldType);
     }
 
-    // If the target is a Link field, read its link_value from the JOINed CTE or subquery
-    let fallbackBlockedLinkIdForTarget: string | undefined;
+    // Prefer physical column values to avoid recursive formula/lookup expansion.
+    let expression = this.buildPhysicalFieldExpression(targetLookupField, foreignAlias);
 
-    // Treat lookup-link targets as lookups (handled below); only use this branch for real link fields.
-    if (targetLookupField.type === FieldType.Link && !targetLookupField.isLookup) {
-      const nestedLinkFieldId = (targetLookupField as LinkFieldCore).id;
-      const fieldCteMap = this.state.getFieldCteMap();
-      if (this.canReuseNestedCte(nestedLinkFieldId) && this.joinedCtes?.has(nestedLinkFieldId)) {
-        const nestedCteName = fieldCteMap.get(nestedLinkFieldId)!;
-        const linkExpr = `"${nestedCteName}"."link_value"`;
-        return this.isSingleValueRelationshipContext
-          ? linkExpr
-          : field.isMultipleCellValue
-            ? this.getJsonAggregationFunction(linkExpr)
-            : linkExpr;
-      }
-      if (nestedLinkFieldId === this.currentLinkFieldId) {
-        return `"${foreignAlias}"."${targetLookupField.dbFieldName}"`;
-      }
-      fallbackBlockedLinkIdForTarget = nestedLinkFieldId;
-    }
-
-    // If the target is a Rollup field, read its precomputed rollup value from the link CTE
-    if (targetLookupField.type === FieldType.Rollup) {
-      const rollupField = targetLookupField as RollupFieldCore;
-      const rollupLinkField = rollupField.getLinkField(this.foreignTable);
-      if (rollupLinkField) {
-        const nestedLinkFieldId = rollupLinkField.id;
-        if (this.canReuseNestedCte(nestedLinkFieldId) && this.joinedCtes?.has(nestedLinkFieldId)) {
-          const nestedCteName = this.fieldCteMap.get(nestedLinkFieldId)!;
-          const expr = `"${nestedCteName}"."rollup_${rollupField.id}"`;
-          return this.isSingleValueRelationshipContext
-            ? expr
-            : field.isMultipleCellValue
-              ? this.getJsonAggregationFunction(expr)
-              : expr;
-        } else {
-          fallbackBlockedLinkIdForTarget = nestedLinkFieldId;
-        }
-      }
-    }
-
-    // If the target is itself a lookup, reference its precomputed value from the JOINed CTE
-    // when available; otherwise compute it directly.
-    let expression: string;
-    if (targetLookupField.isLookup) {
-      const nestedLinkFieldId = getLinkFieldId(targetLookupField.lookupOptions);
-      if (nestedLinkFieldId && nestedLinkFieldId === this.currentLinkFieldId) {
-        // When the lookup we target is computed from the same link CTE we are currently
-        // generating (self-referencing), read its materialized column from the foreign
-        // table instead of trying to reuse or re-enter the link CTE.
-        expression = `"${foreignAlias}"."${targetLookupField.dbFieldName}"`;
-      } else {
-        const fieldCteMap = this.state.getFieldCteMap();
-        if (
-          nestedLinkFieldId &&
-          this.canReuseNestedCte(nestedLinkFieldId) &&
-          this.joinedCtes?.has(nestedLinkFieldId)
-        ) {
-          const nestedCteName = fieldCteMap.get(nestedLinkFieldId)!;
-          expression = `"${nestedCteName}"."lookup_${targetLookupField.id}"`;
-        } else if (nestedLinkFieldId) {
-          // Block the nested link id so the select visitor does not attempt to reuse
-          // the same link CTE (which may not exist in this scope) and instead computes
-          // the lookup expression directly.
-          const visitor = buildSelectVisitor(nestedLinkFieldId);
-          const targetFieldResult = targetLookupField.accept(visitor);
-          expression = this.unwrapSelectName(targetFieldResult);
-        } else {
-          const targetFieldResult = targetLookupField.accept(selectVisitor);
-          expression = this.unwrapSelectName(targetFieldResult);
-        }
-      }
-    } else {
-      const visitor =
-        fallbackBlockedLinkIdForTarget !== undefined
-          ? buildSelectVisitor(fallbackBlockedLinkIdForTarget)
-          : selectVisitor;
-      const targetFieldResult = targetLookupField.accept(visitor);
-      const defaultForeignAlias = getTableAliasFromTable(this.foreignTable);
-      const baseExpression = this.unwrapSelectName(targetFieldResult);
-      const normalizedBaseExpression =
-        defaultForeignAlias !== foreignAlias
-          ? baseExpression.replaceAll(`"${defaultForeignAlias}"`, `"${foreignAlias}"`)
-          : baseExpression;
-      expression = normalizedBaseExpression;
-
-      // For Postgres multi-value lookups targeting datetime-like fields, normalize the
-      // element expression to an ISO8601 UTC string so downstream JSON comparisons using
-      // lexicographical ranges (jsonpath @ >= "..." && @ <= "...") behave correctly.
-      // Do NOT alter single-value lookups to preserve native type comparisons in filters.
-      if (
-        this.dbProvider.driver === DriverClient.Pg &&
-        field.isMultipleCellValue &&
-        isDateLikeField(targetLookupField)
-      ) {
-        // Format: 2020-01-10T16:00:00.000Z, wrap as jsonb so downstream aggregation remains valid JSON.
-        const isoUtcExpr = `to_char(${normalizedBaseExpression} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
-        expression = `to_jsonb(${isoUtcExpr})`;
-      }
+    // For Postgres multi-value lookups targeting datetime-like fields, normalize the
+    // element expression to an ISO8601 UTC string so downstream JSON comparisons using
+    // lexicographical ranges (jsonpath @ >= "..." && @ <= "...") behave correctly.
+    // Do NOT alter single-value lookups to preserve native type comparisons in filters.
+    if (
+      this.dbProvider.driver === DriverClient.Pg &&
+      field.isMultipleCellValue &&
+      isDateLikeField(targetLookupField) &&
+      targetLookupField.dbFieldType === DbFieldType.DateTime
+    ) {
+      // Format: 2020-01-10T16:00:00.000Z, wrap as jsonb so downstream aggregation remains valid JSON.
+      const isoUtcExpr = `to_char(${expression} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+      expression = `to_jsonb(${isoUtcExpr})`;
     }
     // Build deterministic order-by for multi-value lookups using the link field configuration
     const linkForOrderingId = getLinkFieldId(field.lookupOptions);
@@ -840,14 +754,11 @@ class FieldCteSelectionVisitor implements IFieldVisitor<IFieldSelectName> {
     // Use table alias for cleaner SQL
     const recordIdRef = `"${foreignTableAlias}"."${ID_FIELD_NAME}"`;
 
-    const selectVisitor = this.createFieldSelectVisitor(
-      foreignTable,
-      foreignTableAlias,
-      true,
-      false
+    // Prefer physical column values to avoid recursive formula/lookup expansion.
+    let rawSelectionExpression = this.buildPhysicalFieldExpression(
+      targetLookupField,
+      foreignTableAlias
     );
-    const targetFieldResult = targetLookupField.accept(selectVisitor);
-    let rawSelectionExpression = this.unwrapSelectName(targetFieldResult);
 
     // Apply field formatting to build the display expression
     const formattingVisitor = new FieldFormattingVisitor(rawSelectionExpression, this.dialect);
@@ -987,68 +898,13 @@ class FieldCteSelectionVisitor implements IFieldVisitor<IFieldSelectName> {
       return this.dialect.typedNullFor(field.dbFieldType);
     }
 
-    const buildSelectVisitor = (extraBlockedId?: string) =>
-      this.createFieldSelectVisitor(
-        this.foreignTable,
-        this.getForeignAlias(),
-        true,
-        false,
-        extraBlockedId ? [extraBlockedId] : undefined
-      );
-    const selectVisitor = buildSelectVisitor();
-
     const foreignAlias = this.getForeignAlias();
     const targetLookupField = field.getForeignLookupField(this.foreignTable);
     if (!targetLookupField) {
       return this.dialect.typedNullFor(field.dbFieldType);
     }
-    // If the target of rollup depends on a foreign link CTE, reference the JOINed CTE columns or use subquery
-    if (targetLookupField.type === FieldType.Formula) {
-      const formulaField = targetLookupField as FormulaFieldCore;
-      const referenced = formulaField.getReferenceFields(this.foreignTable);
-      for (const ref of referenced) {
-        // Pre-generate nested CTEs for foreign-table link dependencies if any lookup/rollup targets are themselves lookup fields.
-        ref.accept(selectVisitor);
-      }
-    }
-
-    // If the target of rollup depends on a foreign link CTE, reference the JOINed CTE columns or use subquery
-    let expression: string;
-    const nestedLinkFieldId = getLinkFieldId(targetLookupField.lookupOptions);
-    if (this.canReuseNestedCte(nestedLinkFieldId) && this.joinedCtes?.has(nestedLinkFieldId)) {
-      const nestedCteName = this.fieldCteMap.get(nestedLinkFieldId)!;
-      const columnName = targetLookupField.isLookup
-        ? `lookup_${targetLookupField.id}`
-        : targetLookupField.type === FieldType.Rollup
-          ? `rollup_${targetLookupField.id}`
-          : undefined;
-      if (columnName) {
-        expression = `"${nestedCteName}"."${columnName}"`;
-      } else {
-        const targetFieldResult = targetLookupField.accept(selectVisitor);
-        expression = this.unwrapSelectName(targetFieldResult);
-      }
-    } else {
-      const visitor = buildSelectVisitor(nestedLinkFieldId);
-      const targetFieldResult = targetLookupField.accept(visitor);
-      expression = this.unwrapSelectName(targetFieldResult);
-    }
-
-    if (
-      targetLookupField.isConditionalLookup ||
-      (targetLookupField.type === FieldType.ConditionalRollup && !targetLookupField.isLookup)
-    ) {
-      const nestedCteName = this.fieldCteMap.get(targetLookupField.id);
-      if (nestedCteName) {
-        const columnName =
-          targetLookupField.type === FieldType.ConditionalRollup && !targetLookupField.isLookup
-            ? `conditional_rollup_${targetLookupField.id}`
-            : `conditional_lookup_${targetLookupField.id}`;
-        if (this.joinedCtes?.has(targetLookupField.id)) {
-          expression = `"${nestedCteName}"."${columnName}"`;
-        }
-      }
-    }
+    // Prefer physical column values to avoid recursive formula/lookup expansion.
+    const expression = this.buildPhysicalFieldExpression(targetLookupField, foreignAlias);
     const linkField = field.getLinkField(this.table);
     const options = linkField?.options as ILinkFieldOptions;
     const isSingleValueRelationship =
@@ -1061,6 +917,9 @@ class FieldCteSelectionVisitor implements IFieldVisitor<IFieldSelectName> {
   }
 
   visitConditionalRollupField(field: ConditionalRollupFieldCore): IFieldSelectName {
+    if (field.isLookup) {
+      return this.visitLookupField(field);
+    }
     const cteName = this.fieldCteMap.get(field.id);
     if (!cteName) {
       return this.dialect.typedNullFor(field.dbFieldType);
@@ -1113,6 +972,7 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
   private readonly pendingLinkCteNames = new Map<string, string>();
   private filteredIdSet?: Set<string>;
   private readonly projection?: string[];
+  private readonly expandFormulaReferences: boolean;
 
   constructor(
     public readonly qb: Knex.QueryBuilder,
@@ -1120,11 +980,13 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
     private readonly tables: Tables,
     state: IMutableQueryBuilderState | undefined,
     private readonly dialect: IRecordQueryDialectProvider,
-    projection?: string[]
+    projection?: string[],
+    expandFormulaReferences: boolean = true
   ) {
     this.state = state ?? new RecordQueryBuilderManager('table');
     this._table = tables.mustGetEntryTable();
     this.projection = projection;
+    this.expandFormulaReferences = expandFormulaReferences;
   }
 
   get table() {
@@ -1185,6 +1047,78 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
 
   private getCteNameForField(fieldId: string): string | undefined {
     return this.state.getCteName(fieldId) ?? this.pendingLinkCteNames.get(fieldId);
+  }
+
+  private buildFieldReferenceContext(
+    table: TableDomain,
+    foreignTable: TableDomain,
+    mainAlias: string,
+    foreignAlias: string
+  ): {
+    fieldReferenceSelectionMap: Map<string, string>;
+    fieldReferenceFieldMap: Map<string, FieldCore>;
+  } {
+    const fieldReferenceSelectionMap = new Map<string, string>();
+    const fieldReferenceFieldMap = new Map<string, FieldCore>();
+
+    if (table.id === foreignTable.id) {
+      for (const field of table.fields.ordered) {
+        fieldReferenceSelectionMap.set(field.id, `"${foreignAlias}"."${field.dbFieldName}"`);
+        fieldReferenceFieldMap.set(field.id, field as FieldCore);
+      }
+      return { fieldReferenceSelectionMap, fieldReferenceFieldMap };
+    }
+
+    for (const field of table.fields.ordered) {
+      fieldReferenceSelectionMap.set(field.id, `"${mainAlias}"."${field.dbFieldName}"`);
+      fieldReferenceFieldMap.set(field.id, field as FieldCore);
+    }
+
+    for (const field of foreignTable.fields.ordered) {
+      if (fieldReferenceSelectionMap.has(field.id)) continue;
+      fieldReferenceSelectionMap.set(field.id, `"${foreignAlias}"."${field.dbFieldName}"`);
+      fieldReferenceFieldMap.set(field.id, field as FieldCore);
+    }
+
+    return { fieldReferenceSelectionMap, fieldReferenceFieldMap };
+  }
+
+  private buildPhysicalFieldExpression(field: FieldCore, alias: string): string {
+    if (field.hasError) {
+      return this.dialect.typedNullFor(field.dbFieldType);
+    }
+    return `"${alias}"."${field.dbFieldName}"`;
+  }
+
+  private buildConditionalFilterSelectionMap(
+    foreignTable: TableDomain,
+    foreignAlias: string,
+    filter: IFilter | null | undefined,
+    selectVisitor: FieldSelectVisitor
+  ): Map<string, string> {
+    const selectionMap = new Map<string, string>();
+    if (!filter) return selectionMap;
+
+    const filterFieldIds = extractFieldIdsFromFilter(filter);
+    for (const fieldId of filterFieldIds) {
+      const field = foreignTable.getField(fieldId);
+      if (!field) continue;
+      let selection = this.buildPhysicalFieldExpression(field, foreignAlias);
+      if (
+        this.expandFormulaReferences &&
+        (field.type === FieldType.ConditionalRollup || field.isConditionalLookup)
+      ) {
+        selection = this.resolveConditionalComputedTargetExpression(
+          field,
+          foreignTable,
+          foreignAlias,
+          selectVisitor
+        );
+      }
+      selectionMap.set(field.id, selection);
+    }
+
+    return selectionMap;
   }
 
   private getBaseIdSubquery(): Knex.QueryBuilder | undefined {
@@ -1516,7 +1450,17 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
     foreignAlias: string,
     selectVisitor: FieldSelectVisitor
   ): string {
-    if (targetField.type === FieldType.ConditionalRollup && !targetField.isLookup) {
+    if (
+      !this.expandFormulaReferences &&
+      (targetField.isLookup ||
+        targetField.type === FieldType.Rollup ||
+        targetField.type === FieldType.ConditionalRollup ||
+        targetField.type === FieldType.Link)
+    ) {
+      return this.buildPhysicalFieldExpression(targetField, foreignAlias);
+    }
+
+    if (targetField.type === FieldType.ConditionalRollup) {
       const conditionalTarget = targetField as ConditionalRollupFieldCore;
       this.generateConditionalRollupFieldCteForScope(foreignTable, conditionalTarget);
       const nestedCteName = this.getCteNameForField(conditionalTarget.id);
@@ -1534,10 +1478,7 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
       }
       const nestedCteName = this.getCteNameForField(targetField.id);
       if (nestedCteName) {
-        const column =
-          targetField.type === FieldType.ConditionalRollup
-            ? `conditional_rollup_${targetField.id}`
-            : `conditional_lookup_${targetField.id}`;
+        const column = `conditional_lookup_${targetField.id}`;
         return `((SELECT "${column}" FROM "${nestedCteName}" WHERE "${nestedCteName}"."main_record_id" = "${foreignAlias}"."${ID_FIELD_NAME}"))`;
       }
     }
@@ -1593,7 +1534,7 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
         foreignTable,
         foreignAliasUsed,
         true,
-        false
+        !this.expandFormulaReferences
       );
 
       const rawExpression = this.resolveConditionalComputedTargetExpression(
@@ -1705,15 +1646,8 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
             selectionMap.set(f.id, `"${foreignAliasUsed}"."${f.dbFieldName}"`);
           }
 
-          const fieldReferenceSelectionMap = new Map<string, string>();
-          const fieldReferenceFieldMap = new Map<string, FieldCore>();
-          for (const mainField of table.fields.ordered) {
-            fieldReferenceSelectionMap.set(
-              mainField.id,
-              `"${mainAlias}"."${mainField.dbFieldName}"`
-            );
-            fieldReferenceFieldMap.set(mainField.id, mainField as FieldCore);
-          }
+          const { fieldReferenceSelectionMap, fieldReferenceFieldMap } =
+            this.buildFieldReferenceContext(table, foreignTable, mainAlias, foreignAliasUsed);
 
           this.dbProvider
             .filterQuery(countsQuery, fieldMap, equalityPlan.residualFilter, undefined, {
@@ -1774,23 +1708,15 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
           {} as Record<string, FieldCore>
         );
 
-        const selectionMap = new Map<string, IFieldSelectName>();
-        for (const f of foreignTable.fields.ordered) {
-          selectionMap.set(f.id, `"${foreignAliasUsed}"."${f.dbFieldName}"`);
-        }
+        const selectionMap = this.buildConditionalFilterSelectionMap(
+          foreignTable,
+          foreignAliasUsed,
+          filter,
+          selectVisitor
+        );
 
-        const fieldReferenceSelectionMap = new Map<string, string>();
-        const fieldReferenceFieldMap = new Map<string, FieldCore>();
-        // For self-table conditional lookups, resolve field references against the foreign alias
-        // so comparisons like "Status is {Title}" are evaluated on the foreign row.
-        const referenceAlias = foreignTable.id === table.id ? foreignAliasUsed : mainAlias;
-        for (const mainField of table.fields.ordered) {
-          fieldReferenceSelectionMap.set(
-            mainField.id,
-            `"${referenceAlias}"."${mainField.dbFieldName}"`
-          );
-          fieldReferenceFieldMap.set(mainField.id, mainField as FieldCore);
-        }
+        const { fieldReferenceSelectionMap, fieldReferenceFieldMap } =
+          this.buildFieldReferenceContext(table, foreignTable, mainAlias, foreignAliasUsed);
 
         this.dbProvider
           .filterQuery(aggregateSourceQuery, fieldMap, filter, undefined, {
@@ -1901,7 +1827,7 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
         foreignTable,
         foreignAliasUsed,
         true,
-        false
+        !this.expandFormulaReferences
       );
 
       const rawExpression = this.resolveConditionalComputedTargetExpression(
@@ -2013,23 +1939,15 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
           {} as Record<string, FieldCore>
         );
 
-        const selectionMap = new Map<string, IFieldSelectName>();
-        for (const f of foreignTable.fields.ordered) {
-          selectionMap.set(f.id, `"${foreignAliasUsed}"."${f.dbFieldName}"`);
-        }
+        const selectionMap = this.buildConditionalFilterSelectionMap(
+          foreignTable,
+          foreignAliasUsed,
+          targetFilter,
+          selectVisitor
+        );
 
-        const fieldReferenceSelectionMap = new Map<string, string>();
-        const fieldReferenceFieldMap = new Map<string, FieldCore>();
-        // For self-table conditional lookups, resolve field references against the foreign alias
-        // so comparisons like "Status is {Title}" are evaluated on the foreign row.
-        const referenceAlias = foreignTable.id === table.id ? foreignAliasUsed : mainAlias;
-        for (const mainField of table.fields.ordered) {
-          fieldReferenceSelectionMap.set(
-            mainField.id,
-            `"${referenceAlias}"."${mainField.dbFieldName}"`
-          );
-          fieldReferenceFieldMap.set(mainField.id, mainField as FieldCore);
-        }
+        const { fieldReferenceSelectionMap, fieldReferenceFieldMap } =
+          this.buildFieldReferenceContext(table, foreignTable, mainAlias, foreignAliasUsed);
 
         this.dbProvider
           .filterQuery(targetQb, fieldMap, targetFilter, undefined, {
@@ -2156,14 +2074,21 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
   }
 
   public build() {
-    const list = getOrderedFieldsByProjection(this.table, this.projection) as FieldCore[];
+    const list = getOrderedFieldsByProjection(
+      this.table,
+      this.projection,
+      this.expandFormulaReferences
+    ) as FieldCore[];
     this.filteredIdSet = new Set(list.map((f) => f.id));
 
     // Ensure CTEs for any link fields that are dependencies of the projected fields.
     // This allows selecting lookup/rollup values even when the link fields themselves
     // are not part of the projection.
     for (const field of list) {
-      const linkFields = field.getLinkFields(this.table);
+      const linkFields =
+        !this.expandFormulaReferences && field.type === FieldType.Formula
+          ? []
+          : field.getLinkFields(this.table);
       for (const lf of linkFields) {
         if (!lf) continue;
         if (!this.state.getFieldCteMap().has(lf.id)) {
@@ -2294,9 +2219,11 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
             }
           ).getReferenceFields;
           if (typeof maybeGetReferenceFields === 'function') {
-            const referencedFields = maybeGetReferenceFields.call(field, foreignTable) ?? [];
-            for (const refField of referencedFields) {
-              collectLinkDependencies(refField, visited);
+            if (this.expandFormulaReferences) {
+              const referencedFields = maybeGetReferenceFields.call(field, foreignTable) ?? [];
+              for (const refField of referencedFields) {
+                collectLinkDependencies(refField, visited);
+              }
             }
           }
         };
@@ -3052,6 +2979,9 @@ export class FieldCteVisitor implements IFieldVisitor<ICteResult> {
   }
   visitRollupField(_field: RollupFieldCore): void {}
   visitConditionalRollupField(field: ConditionalRollupFieldCore): void {
+    if (field.isLookup) {
+      return;
+    }
     this.generateConditionalRollupFieldCte(field);
   }
   visitSingleSelectField(_field: SingleSelectFieldCore): void {}

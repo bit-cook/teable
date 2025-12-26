@@ -28,6 +28,13 @@ import { DB_PROVIDER_SYMBOL } from '../src/db-provider/db.provider';
 import type { IDbProvider } from '../src/db-provider/db.provider.interface';
 import { EventEmitterService } from '../src/event-emitter/event-emitter.service';
 import { Events } from '../src/event-emitter/events';
+import { FieldSelectVisitor } from '../src/features/record/query-builder/field-select-visitor';
+import { RecordQueryBuilderManager } from '../src/features/record/query-builder/record-query-builder.manager';
+import {
+  type IRecordQueryDialectProvider,
+  RECORD_QUERY_DIALECT_SYMBOL,
+} from '../src/features/record/query-builder/record-query-dialect.interface';
+import { TableDomainQueryService } from '../src/features/table-domain/table-domain-query.service';
 import { createAwaitWithEventWithResultWithCount } from './utils/event-promise';
 import {
   deleteField,
@@ -52,6 +59,8 @@ describe('Computed Orchestrator (e2e)', () => {
   let prisma: PrismaService;
   let knex: Knex;
   let db: IDbProvider;
+  let tableDomainQueryService: TableDomainQueryService;
+  let recordDialect: IRecordQueryDialectProvider;
   const baseId = (globalThis as any).testConfig.baseId as string;
 
   beforeAll(async () => {
@@ -61,6 +70,8 @@ describe('Computed Orchestrator (e2e)', () => {
     prisma = app.get(PrismaService);
     knex = app.get('CUSTOM_KNEX' as any);
     db = app.get<IDbProvider>(DB_PROVIDER_SYMBOL as any);
+    tableDomainQueryService = app.get(TableDomainQueryService);
+    recordDialect = app.get<IRecordQueryDialectProvider>(RECORD_QUERY_DIALECT_SYMBOL as any);
   });
 
   afterAll(async () => {
@@ -227,6 +238,43 @@ describe('Computed Orchestrator (e2e)', () => {
       await updateRecordByApi(table.id, recordId, aField.id, null);
       const updatedRecord = await getRecord(table.id, recordId);
       expect(updatedRecord.fields[formulaField.id]).toBe(0);
+
+      await permanentDeleteTable(baseId, table.id);
+    });
+
+    it('recomputes layered formulas after a formula definition change', async () => {
+      const table = await createTable(baseId, {
+        name: 'Formula_Layer_Recompute',
+        fields: [{ name: 'Amount', type: FieldType.Number } as IFieldRo],
+        records: [{ fields: { Amount: 5 } }],
+      });
+      const amountId = table.fields.find((f) => f.name === 'Amount')!.id;
+
+      const plusOne = await createField(table.id, {
+        name: 'PlusOne',
+        type: FieldType.Formula,
+        options: { expression: `{${amountId}} + 1` },
+      } as IFieldRo);
+
+      const plusTwo = await createField(table.id, {
+        name: 'PlusTwo',
+        type: FieldType.Formula,
+        options: { expression: `{${plusOne.id}} + 1` },
+      } as IFieldRo);
+
+      const recordId = table.records[0].id;
+      const initial = await getRecord(table.id, recordId);
+      expect(initial.fields[plusOne.id]).toEqual(6);
+      expect(initial.fields[plusTwo.id]).toEqual(7);
+
+      await convertField(table.id, plusOne.id, {
+        type: FieldType.Formula,
+        options: { expression: `{${amountId}} + 2` },
+      });
+
+      const updated = await getRecord(table.id, recordId);
+      expect(updated.fields[plusOne.id]).toEqual(7);
+      expect(updated.fields[plusTwo.id]).toEqual(8);
 
       await permanentDeleteTable(baseId, table.id);
     });
@@ -721,6 +769,70 @@ IF(
       } finally {
         await permanentDeleteTable(baseId, table.id);
       }
+    });
+  });
+
+  describe('Query Builder Selection', () => {
+    it('falls back to raw column selection when conditional lookup CTE is not joined', async () => {
+      const foreign = await createTable(baseId, {
+        name: 'ConditionalLookup_Selection_Foreign',
+        fields: [{ name: 'Value', type: FieldType.Number } as IFieldRo],
+        records: [{ fields: { Value: 10 } }],
+      });
+      const foreignValueId = foreign.fields.find((f) => f.name === 'Value')!.id;
+
+      const host = await createTable(baseId, {
+        name: 'ConditionalLookup_Selection_Host',
+        fields: [{ name: 'Title', type: FieldType.SingleLineText } as IFieldRo],
+        records: [{ fields: { Title: 'Row' } }],
+      });
+
+      const conditionalLookup = await createField(host.id, {
+        name: 'Filtered Value',
+        type: FieldType.Number,
+        isLookup: true,
+        isConditionalLookup: true,
+        lookupOptions: {
+          foreignTableId: foreign.id,
+          lookupFieldId: foreignValueId,
+          filter: {
+            conjunction: 'and',
+            filterSet: [
+              {
+                fieldId: foreignValueId,
+                operator: 'isNotEmpty',
+                value: null,
+              },
+            ],
+          },
+        } as ILookupOptionsRo,
+      } as IFieldRo);
+
+      const hostDomain = await tableDomainQueryService.getTableDomainById(host.id);
+      const lookupField = hostDomain.getField(conditionalLookup.id);
+      expect(lookupField?.isConditionalLookup).toBe(true);
+
+      const state = new RecordQueryBuilderManager('table');
+      const cteName = `CTE_CONDITIONAL_LOOKUP_${conditionalLookup.id}`;
+      state.setFieldCte(conditionalLookup.id, cteName);
+
+      const visitor = new FieldSelectVisitor(
+        knex.queryBuilder(),
+        db,
+        hostDomain,
+        state,
+        recordDialect,
+        't',
+        true,
+        true
+      );
+
+      const selection = lookupField!.accept(visitor);
+      const selectionSql = typeof selection === 'string' ? selection : selection.toQuery();
+      expect(selectionSql).toBe(`"t"."${lookupField!.dbFieldName}"`);
+
+      await permanentDeleteTable(baseId, host.id);
+      await permanentDeleteTable(baseId, foreign.id);
     });
   });
 
@@ -1241,6 +1353,239 @@ IF(
       expect(parseMaybe((t2Row as any)[lkp2Full.dbFieldName])).toEqual([15]);
       expect(parseMaybe((t3Row as any)[lkp3Full.dbFieldName])).toEqual([15]);
 
+      await permanentDeleteTable(baseId, t3.id);
+      await permanentDeleteTable(baseId, t2.id);
+      await permanentDeleteTable(baseId, t1.id);
+    });
+
+    it('handles interleaved lookup dependencies across tables', async () => {
+      // T1: base number
+      const t1 = await createTable(baseId, {
+        name: 'Interleave_T1',
+        fields: [{ name: 'A', type: FieldType.Number } as IFieldRo],
+        records: [{ fields: { A: 1 } }],
+      });
+      const aId = t1.fields.find((f) => f.name === 'A')!.id;
+
+      // T3: base number used by T2 lookup (creates table-level cycle)
+      const t3 = await createTable(baseId, {
+        name: 'Interleave_T3',
+        fields: [{ name: 'CBase', type: FieldType.Number } as IFieldRo],
+        records: [{ fields: { CBase: 5 } }],
+      });
+      const cBaseId = t3.fields.find((f) => f.name === 'CBase')!.id;
+
+      // T2: lookup A via link to T1; also lookup CBase via link to T3
+      const t2 = await createTable(baseId, {
+        name: 'Interleave_T2',
+        fields: [],
+        records: [{ fields: {} }],
+      });
+      const linkT1 = await createField(t2.id, {
+        name: 'L_T1',
+        type: FieldType.Link,
+        options: { relationship: Relationship.ManyMany, foreignTableId: t1.id },
+      } as IFieldRo);
+      const lkpA = await createField(t2.id, {
+        name: 'LKP_A',
+        type: FieldType.Number,
+        isLookup: true,
+        lookupOptions: { foreignTableId: t1.id, linkFieldId: linkT1.id, lookupFieldId: aId } as any,
+      } as any);
+      const linkT3 = await createField(t2.id, {
+        name: 'L_T3',
+        type: FieldType.Link,
+        options: { relationship: Relationship.ManyMany, foreignTableId: t3.id },
+      } as IFieldRo);
+      const lkpC = await createField(t2.id, {
+        name: 'LKP_C',
+        type: FieldType.Number,
+        isLookup: true,
+        lookupOptions: {
+          foreignTableId: t3.id,
+          linkFieldId: linkT3.id,
+          lookupFieldId: cBaseId,
+        } as any,
+      } as any);
+
+      // T3: lookup LKP_A from T2 (depends on T2)
+      const linkT2 = await createField(t3.id, {
+        name: 'L_T2',
+        type: FieldType.Link,
+        options: { relationship: Relationship.ManyMany, foreignTableId: t2.id },
+      } as IFieldRo);
+      const lkpFromT2 = await createField(t3.id, {
+        name: 'LKP_T2_A',
+        type: FieldType.Number,
+        isLookup: true,
+        lookupOptions: {
+          foreignTableId: t2.id,
+          linkFieldId: linkT2.id,
+          lookupFieldId: lkpA.id,
+        } as any,
+      } as any);
+
+      // Establish links to create interleaved dependencies
+      await updateRecordByApi(t2.id, t2.records[0].id, linkT1.id, [{ id: t1.records[0].id }]);
+      await updateRecordByApi(t2.id, t2.records[0].id, linkT3.id, [{ id: t3.records[0].id }]);
+      await updateRecordByApi(t3.id, t3.records[0].id, linkT2.id, [{ id: t2.records[0].id }]);
+
+      const { payloads } = (await createAwaitWithEventWithResultWithCount(
+        eventEmitterService,
+        Events.TABLE_RECORD_UPDATE,
+        3
+      )(async () => {
+        await updateRecordByApi(t1.id, t1.records[0].id, aId, 7);
+      })) as any;
+
+      const t2Event = (payloads as any[]).find((e) => e.payload.tableId === t2.id)!;
+      const t2Changes = (
+        Array.isArray(t2Event.payload.record) ? t2Event.payload.record[0] : t2Event.payload.record
+      ).fields as FieldChangeMap;
+      const t2Change = assertChange(t2Changes[lkpA.id]);
+      expectNoOldValue(t2Change);
+      expect(t2Change.newValue).toEqual([7]);
+
+      const t3Event = (payloads as any[]).find((e) => e.payload.tableId === t3.id)!;
+      const t3Changes = (
+        Array.isArray(t3Event.payload.record) ? t3Event.payload.record[0] : t3Event.payload.record
+      ).fields as FieldChangeMap;
+      const t3Change = assertChange(t3Changes[lkpFromT2.id]);
+      expectNoOldValue(t3Change);
+      expect(t3Change.newValue).toEqual([7]);
+
+      const t2Db = await getDbTableName(t2.id);
+      const t3Db = await getDbTableName(t3.id);
+      const t2Row = await getRow(t2Db, t2.records[0].id);
+      const t3Row = await getRow(t3Db, t3.records[0].id);
+      const t2Fields = await getFields(t2.id);
+      const [lkpAFull] = t2Fields.filter((x) => x.id === (lkpA as any).id) as any[];
+      const [lkpCFull] = t2Fields.filter((x) => x.id === (lkpC as any).id) as any[];
+      const [lkpFromT2Full] = (await getFields(t3.id)).filter(
+        (x) => x.id === (lkpFromT2 as any).id
+      ) as any[];
+      expect(parseMaybe((t2Row as any)[lkpAFull.dbFieldName])).toEqual([7]);
+      expect(parseMaybe((t2Row as any)[lkpCFull.dbFieldName])).toEqual([5]);
+      expect(parseMaybe((t3Row as any)[lkpFromT2Full.dbFieldName])).toEqual([7]);
+
+      await permanentDeleteTable(baseId, t2.id);
+      await permanentDeleteTable(baseId, t3.id);
+      await permanentDeleteTable(baseId, t1.id);
+    });
+
+    it('propagates multi-level lookup chain across four tables', async () => {
+      // T1: A (number)
+      const t1 = await createTable(baseId, {
+        name: 'Chain4_T1',
+        fields: [{ name: 'A', type: FieldType.Number } as IFieldRo],
+        records: [{ fields: { A: 2 } }],
+      });
+      const aId = t1.fields.find((f) => f.name === 'A')!.id;
+      await updateRecordByApi(t1.id, t1.records[0].id, aId, 2);
+
+      // T2: link -> T1, L2 = lookup(A)
+      const t2 = await createTable(baseId, {
+        name: 'Chain4_T2',
+        fields: [],
+        records: [{ fields: {} }],
+      });
+      const l12 = await createField(t2.id, {
+        name: 'L_T1',
+        type: FieldType.Link,
+        options: { relationship: Relationship.ManyMany, foreignTableId: t1.id },
+      } as IFieldRo);
+      const l2 = await createField(t2.id, {
+        name: 'L2',
+        type: FieldType.Number,
+        isLookup: true,
+        lookupOptions: { foreignTableId: t1.id, linkFieldId: l12.id, lookupFieldId: aId } as any,
+      } as any);
+      await updateRecordByApi(t2.id, t2.records[0].id, l12.id, [{ id: t1.records[0].id }]);
+
+      // T3: link -> T2, L3 = lookup(L2)
+      const t3 = await createTable(baseId, {
+        name: 'Chain4_T3',
+        fields: [],
+        records: [{ fields: {} }],
+      });
+      const l23 = await createField(t3.id, {
+        name: 'L_T2',
+        type: FieldType.Link,
+        options: { relationship: Relationship.ManyMany, foreignTableId: t2.id },
+      } as IFieldRo);
+      const l3 = await createField(t3.id, {
+        name: 'L3',
+        type: FieldType.Number,
+        isLookup: true,
+        lookupOptions: { foreignTableId: t2.id, linkFieldId: l23.id, lookupFieldId: l2.id } as any,
+      } as any);
+      await updateRecordByApi(t3.id, t3.records[0].id, l23.id, [{ id: t2.records[0].id }]);
+
+      // T4: link -> T3, L4 = lookup(L3)
+      const t4 = await createTable(baseId, {
+        name: 'Chain4_T4',
+        fields: [],
+        records: [{ fields: {} }],
+      });
+      const l34 = await createField(t4.id, {
+        name: 'L_T3',
+        type: FieldType.Link,
+        options: { relationship: Relationship.ManyMany, foreignTableId: t3.id },
+      } as IFieldRo);
+      const l4 = await createField(t4.id, {
+        name: 'L4',
+        type: FieldType.Number,
+        isLookup: true,
+        lookupOptions: { foreignTableId: t3.id, linkFieldId: l34.id, lookupFieldId: l3.id } as any,
+      } as any);
+      await updateRecordByApi(t4.id, t4.records[0].id, l34.id, [{ id: t3.records[0].id }]);
+
+      const { payloads } = (await createAwaitWithEventWithResultWithCount(
+        eventEmitterService,
+        Events.TABLE_RECORD_UPDATE,
+        4
+      )(async () => {
+        await updateRecordByApi(t1.id, t1.records[0].id, aId, 9);
+      })) as any;
+
+      const t2Event = (payloads as any[]).find((e) => e.payload.tableId === t2.id)!;
+      const t2Changes = (
+        Array.isArray(t2Event.payload.record) ? t2Event.payload.record[0] : t2Event.payload.record
+      ).fields as FieldChangeMap;
+      const t2Change = assertChange(t2Changes[l2.id]);
+      expectNoOldValue(t2Change);
+      expect(t2Change.newValue).toEqual([9]);
+
+      const t3Event = (payloads as any[]).find((e) => e.payload.tableId === t3.id)!;
+      const t3Changes = (
+        Array.isArray(t3Event.payload.record) ? t3Event.payload.record[0] : t3Event.payload.record
+      ).fields as FieldChangeMap;
+      const t3Change = assertChange(t3Changes[l3.id]);
+      expectNoOldValue(t3Change);
+      expect(t3Change.newValue).toEqual([9]);
+
+      const t4Event = (payloads as any[]).find((e) => e.payload.tableId === t4.id)!;
+      const t4Changes = (
+        Array.isArray(t4Event.payload.record) ? t4Event.payload.record[0] : t4Event.payload.record
+      ).fields as FieldChangeMap;
+      const t4Change = assertChange(t4Changes[l4.id]);
+      expectNoOldValue(t4Change);
+      expect(t4Change.newValue).toEqual([9]);
+
+      const t2Db = await getDbTableName(t2.id);
+      const t3Db = await getDbTableName(t3.id);
+      const t4Db = await getDbTableName(t4.id);
+      const t2Row = await getRow(t2Db, t2.records[0].id);
+      const t3Row = await getRow(t3Db, t3.records[0].id);
+      const t4Row = await getRow(t4Db, t4.records[0].id);
+      const [l2Full] = (await getFields(t2.id)).filter((x) => x.id === (l2 as any).id) as any[];
+      const [l3Full] = (await getFields(t3.id)).filter((x) => x.id === (l3 as any).id) as any[];
+      const [l4Full] = (await getFields(t4.id)).filter((x) => x.id === (l4 as any).id) as any[];
+      expect(parseMaybe((t2Row as any)[l2Full.dbFieldName])).toEqual([9]);
+      expect(parseMaybe((t3Row as any)[l3Full.dbFieldName])).toEqual([9]);
+      expect(parseMaybe((t4Row as any)[l4Full.dbFieldName])).toEqual([9]);
+
+      await permanentDeleteTable(baseId, t4.id);
       await permanentDeleteTable(baseId, t3.id);
       await permanentDeleteTable(baseId, t2.id);
       await permanentDeleteTable(baseId, t1.id);

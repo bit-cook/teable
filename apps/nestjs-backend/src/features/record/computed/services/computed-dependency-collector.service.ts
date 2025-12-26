@@ -703,6 +703,38 @@ export class ComputedDependencyCollectorService {
     return result;
   }
 
+  private async collectReferencedFieldsByTable(
+    fieldIds: string[]
+  ): Promise<Record<string, Set<string>>> {
+    const ids = Array.from(new Set(fieldIds.filter(Boolean)));
+    if (!ids.length) {
+      return {};
+    }
+
+    const refRows = await this.prismaService.txClient().reference.findMany({
+      where: { toFieldId: { in: ids } },
+      select: { fromFieldId: true },
+    });
+    const fromIds = Array.from(
+      new Set(refRows.map((row) => row.fromFieldId).filter((id): id is string => !!id))
+    );
+    if (!fromIds.length) {
+      return {};
+    }
+
+    const fields = await this.prismaService.txClient().field.findMany({
+      where: { id: { in: fromIds }, deletedTime: null },
+      select: { id: true, tableId: true },
+    });
+
+    const result: Record<string, Set<string>> = {};
+    for (const field of fields) {
+      if (!field.tableId) continue;
+      (result[field.tableId] ||= new Set<string>()).add(field.id);
+    }
+    return result;
+  }
+
   private async getConditionalRollupImpactedRecordIds(
     edge: IConditionalRollupAdjacencyEdge,
     foreignRecordIds: string[],
@@ -1122,12 +1154,21 @@ export class ComputedDependencyCollectorService {
 
     // 1) Dependent fields grouped by table
     const depByTable = await this.collectDependentFieldsByTable(startFieldIds);
+    const upstreamByTable = await this.collectReferencedFieldsByTable(startFieldIds);
 
     // Initialize impact with dependent fields
     const impact: IComputedImpactByTable = Object.entries(depByTable).reduce((acc, [tid, fset]) => {
       acc[tid] = { fieldIds: new Set(fset), recordIds: new Set<string>() };
       return acc;
     }, {} as IComputedImpactByTable);
+
+    for (const [tid, fset] of Object.entries(upstreamByTable)) {
+      const group = (impact[tid] ||= {
+        fieldIds: new Set<string>(),
+        recordIds: new Set<string>(),
+      });
+      fset.forEach((fid) => group.fieldIds.add(fid));
+    }
 
     // Ensure starting fields themselves are included so conversions can compare old/new values
     for (const f of startFields) {
@@ -1431,11 +1472,9 @@ export class ComputedDependencyCollectorService {
     const changedRecordIds = Array.from(new Set(ctxs.map((c) => c.recordId)));
     const fieldToTableMap = new Map<string, string>();
     changedFieldIds.forEach((fid) => fieldToTableMap.set(fid, tableId));
-    const relatedTables = await this.tableDomainQueryService.getAllRelatedTableDomains(
-      tableId,
-      changedFieldIds
-    );
-    const execCtx = this.createExecutionContext(relatedTables.tableDomains);
+    const entryDomain = await this.tableDomainQueryService.getTableDomainById(tableId);
+    const seedTableDomains = new Map<string, TableDomain>([[tableId, entryDomain]]);
+    const execCtx = this.createExecutionContext(seedTableDomains);
 
     // 1) Transitive dependents grouped by table (SQL CTE + join field)
     const contextByRecord = ctxs.reduce<Map<string, ICellContext[]>>((map, ctx) => {
@@ -1550,7 +1589,7 @@ export class ComputedDependencyCollectorService {
     this.addContextFreeFormulasToImpact(impact, tableId, contextFreeFormulaIds);
 
     if (!Object.keys(impact).length) {
-      return { impact: {}, tableDomains: new Map(relatedTables.tableDomains) };
+      return { impact: {}, tableDomains: new Map(seedTableDomains) };
     }
 
     const impactedTables = new Set([...Object.keys(impact), tableId]);
@@ -1706,7 +1745,7 @@ export class ComputedDependencyCollectorService {
           explicitSeeds,
           tablesWithAllRecords,
           linkEdges,
-          tableDomains: relatedTables.tableDomains,
+          tableDomains,
           ctx: execCtx,
         });
         const growth = this.findRecordSetGrowth(recordSets, nextRecordSets);
@@ -1729,6 +1768,6 @@ export class ComputedDependencyCollectorService {
       }
     }
 
-    return { impact, tableDomains: new Map(relatedTables.tableDomains) };
+    return { impact, tableDomains: new Map(tableDomains) };
   }
 }
