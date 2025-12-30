@@ -2928,8 +2928,9 @@ export type I18nTranslations = {
                     "confirmExpiry": string;
                     "confirmButton": string;
                     "tokenInfo": string;
+                    "tokenCreatedSuccess": string;
                     "copied": string;
-                    "copyToClipboard": string;
+                    "copy": string;
                     "advancedDesc": string;
                     "openAdvanced": string;
                 };
